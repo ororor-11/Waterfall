@@ -19,11 +19,6 @@ def normalize_headers(df):
     df.columns = cleaned
     return df
 
-if errs:
-    st.error("\n".join(errs))
-    with st.expander("What headers did I detect?"):
-        st.write(list(df.columns))
-
 
 # ---- Styles & fonts ----
 try:
