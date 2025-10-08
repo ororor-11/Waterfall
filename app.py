@@ -19,6 +19,57 @@ def normalize_headers(df):
     df.columns = cleaned
     return df
 
+import re
+
+DASHES = {"-", "–", "—", "−"}  # minus & dash lookalikes
+
+def normalize_headers(df):
+    # Drop BOM, trim spaces, force lowercase
+    cleaned = []
+    for c in df.columns:
+        s = str(c)
+        try:
+            s = s.encode("utf-8").decode("utf-8-sig")  # remove BOM if present
+        except Exception:
+            pass
+        cleaned.append(s.strip().lower())
+    df.columns = cleaned
+    return df
+
+def coerce_numeric_col(series, dash_zero=True):
+    # Turn things like "£ 2,296", "(27)", "1.234,56", "—" into real numbers
+    s = series.astype(str)
+
+    # Trim & remove currency symbols and spaces (including non-breaking)
+    s = (s.str.strip()
+          .str.replace(r"[£$€]", "", regex=True)
+          .str.replace("\u00A0", "", regex=False)  # nbsp
+          .str.replace(r"\s+", "", regex=True))
+
+    # Convert (123) to -123
+    s = s.str.replace(r"^\((.*)\)$", r"-\1", regex=True)
+
+    # Remove apostrophe thousands (e.g., 1'234)
+    s = s.str.replace("'", "", regex=False)
+
+    # If both comma and dot appear -> assume comma is thousands (1,234.56)
+    both = s.str.contains(",") & s.str.contains(r"\.")
+    s = s.where(~both, s.str.replace(",", "", regex=False))
+
+    # If only comma appears -> treat as European decimal (1.234,56 -> 1234.56)
+    only_comma = s.str.contains(",") & ~s.str.contains(r"\.")
+    s = s.where(~only_comma,
+                s.str.replace(".", "", regex=False).str.replace(",", ".", regex=False))
+
+    # Treat lone dashes as zero, if desired
+    if dash_zero:
+        s = s.replace({d: "0" for d in DASHES})
+
+    # Empty strings to NaN -> will be caught as non-numeric
+    s = s.replace({"": pd.NA})
+
+    return pd.to_numeric(s, errors="coerce")
+
 
 # ---- Styles & fonts ----
 try:
