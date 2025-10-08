@@ -86,13 +86,14 @@ st.set_page_config(page_title="Cash Waterfall", layout="wide")
 st.title("Cash Waterfall Generator")
 
 with st.expander("CSV format help"):
-    st.code(textwrap.dedent(\"\"\"\
-    entity,period,start,label,amount
-    DevCo,2025-07,2296,Intercompany,1151
-    DevCo,2025-07,2296,Overheads,-27
-    OpCo,2025-07,1386,Financing,15737
-    Group,2025-07,6026,Project Costs,-16847
-    \"\"\"))
+    st.code(textwrap.dedent("""
+entity,period,start,label,amount
+DevCo,2025-07,2296,Intercompany,1151
+DevCo,2025-07,2296,Overheads,-27
+OpCo,2025-07,1386,Financing,15737
+Group,2025-07,6026,Project Costs,-16847
+"""))
+
 
 file = st.file_uploader("Upload CSV", type=["csv"])
 period_filter = st.text_input("Optional: filter by period (e.g., 2025-07)")
