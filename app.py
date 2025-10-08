@@ -17,6 +17,9 @@ st.set_page_config(page_title="Cash Waterfall", layout="wide")
 # =========================
 DASHES = {"-", "–", "—", "−"}  # minus & dash lookalikes
 
+THOUSANDS_PATTERN = r"^\s*[-(]?\d{1,3}(,\d{3})+(\.\d+)?\)?\s*$"   # e.g., 2,242 or (12,345.67)
+DECIMAL_COMMA_PATTERN = r"^\s*[-(]?\d+,\d{1,2}\s*$"               # e.g., 123,45 or (123,4)
+
 def normalize_headers(df: pd.DataFrame) -> pd.DataFrame:
     """Drop BOM, trim spaces, force lowercase for headers."""
     cleaned = []
@@ -31,13 +34,13 @@ def normalize_headers(df: pd.DataFrame) -> pd.DataFrame:
     return df
 
 def coerce_numeric_col(series: pd.Series, dash_zero: bool = True) -> pd.Series:
-    """Turn things like '£ 2,296', '(27)', '1.234,56', '—' into real numbers."""
+    """Turn things like '£ 2,296', '(27)', '1.234,56', '—' into real numbers, preserving thousands commas."""
     s = series.astype(str)
 
     # Trim & remove currency symbols and spaces (including non-breaking)
     s = (s.str.strip()
           .str.replace(r"[£$€]", "", regex=True)
-          .str.replace("\u00A0", "", regex=False)  # nbsp
+          .str.replace("\u00A0", "", regex=False)     # nbsp
           .str.replace(r"\s+", "", regex=True))
 
     # Convert (123) to -123
@@ -46,18 +49,22 @@ def coerce_numeric_col(series: pd.Series, dash_zero: bool = True) -> pd.Series:
     # Remove apostrophe thousands (e.g., 1'234)
     s = s.str.replace("'", "", regex=False)
 
-    # If both comma and dot appear -> assume comma is thousands (1,234.56)
+    # If it matches thousands-style commas (e.g., 2,242), drop commas
+    mask_thousands = s.str.match(THOUSANDS_PATTERN)
+    s = s.where(~mask_thousands, s.str.replace(",", "", regex=False))
+
+    # If it looks like decimal-comma (e.g., 123,45) with no dot, convert comma to dot
+    mask_deccomma = s.str.contains(",") & ~s.str.contains(r"\.") & s.str.match(DECIMAL_COMMA_PATTERN)
+    s = s.where(~mask_deccomma, s.str.replace(",", ".", regex=False))
+
+    # If both comma & dot remain (e.g., 1,234.56), drop the commas
     both = s.str.contains(",") & s.str.contains(r"\.")
     s = s.where(~both, s.str.replace(",", "", regex=False))
 
-    # If only comma appears -> treat as European decimal (1.234,56 -> 1234.56)
-    only_comma = s.str.contains(",") & ~s.str.contains(r"\.")
-    s = s.where(~only_comma,
-                s.str.replace(".", "", regex=False).str.replace(",", ".", regex=False))
-
     # Treat lone dashes as zero, if desired
     if dash_zero:
-        s = s.replace({d: "0" for d in DASHES})
+        for d in DASHES:
+            s = s.replace(d, "0")
 
     # Empty strings to NaN -> will be caught as non-numeric
     s = s.replace({"": pd.NA})
@@ -101,7 +108,6 @@ unit_suffix = {
     "Thousands (£'000)": "£'000",
     "Millions (£m)": "£m",
 }
-
 csv_unit = st.sidebar.selectbox("My CSV numbers are in", list(unit_scale.keys()), index=1)  # default to thousands
 display_unit = st.sidebar.selectbox("Display units", list(unit_scale.keys()), index=1)
 conversion_factor = unit_scale[csv_unit] / unit_scale[display_unit]  # multiply raw by this to display
@@ -117,6 +123,8 @@ min_label_threshold = st.sidebar.number_input(
 
 st.sidebar.header("✏️ Data editing")
 enable_editor = st.sidebar.checkbox("Enable table editor before plotting", False)
+
+show_debug = st.sidebar.checkbox("Show totals debug", False)
 
 # =========================
 # Sample CSV download
@@ -286,10 +294,24 @@ if file:
             # Build charts per (entity, period)
             for (entity_name, period), g in df.groupby(["entity","period"], sort=True):
                 # Convert from CSV units to display units
-                start_val = float(g["start"].iloc[0]) * conversion_factor
-                labels = g["label"].astype(str).tolist()
-                moves  = (g["amount"].astype(float) * conversion_factor).tolist()
+                start_raw = float(g["start"].iloc[0])
+                moves_raw = g["amount"].astype(float).tolist()
+                start_val = start_raw * conversion_factor
+                moves = [m * conversion_factor for m in moves_raw]
 
+                # Debug totals in both raw and display units
+                if show_debug:
+                    sum_moves_raw = float(g["amount"].astype(float).sum())
+                    end_raw = start_raw + sum_moves_raw
+                    sum_moves_disp = sum_moves_raw * conversion_factor
+                    end_disp = end_raw * conversion_factor
+                    st.caption(
+                        f"Debug totals → Start: {format_value(start_val, currency_prefix, value_decimals)}  "
+                        f"+ Movements: {format_value(sum_moves_disp, currency_prefix, value_decimals)}  "
+                        f"= End: {format_value(end_disp, currency_prefix, value_decimals)}"
+                    )
+
+                labels = g["label"].astype(str).tolist()
                 title  = title_template.format(entity=entity_name, period=period)
                 fig = plot_waterfall(start_val, moves, labels, title)
                 st.pyplot(fig, clear_figure=True)
