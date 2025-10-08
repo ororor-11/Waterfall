@@ -73,36 +73,47 @@ except Exception:
     rcParams['font.family'] = 'DejaVu Sans'
 rcParams['font.size'] = 11
 
-# Defaults (can be overridden by sidebar controls)
-COLOR_AXIS_DEFAULT = "#333333"
-COLOR_START_END_DEFAULT = "#4A90E2"
-COLOR_POSITIVE_DEFAULT  = "#4DB6AC"
-COLOR_NEGATIVE_DEFAULT  = "#D96C6C"
-
 # =========================
 # Sidebar controls
 # =========================
 st.sidebar.header("🎨 Appearance")
-
-color_start = st.sidebar.color_picker("Start/End color", COLOR_START_END_DEFAULT)
-color_pos   = st.sidebar.color_picker("Positive bar color", COLOR_POSITIVE_DEFAULT)
-color_neg   = st.sidebar.color_picker("Negative bar color", COLOR_NEGATIVE_DEFAULT)
-axis_color  = st.sidebar.color_picker("Axis/text color", COLOR_AXIS_DEFAULT)
-
+color_start = st.sidebar.color_picker("Start/End color", "#4A90E2")
+color_pos   = st.sidebar.color_picker("Positive bar color", "#4DB6AC")
+color_neg   = st.sidebar.color_picker("Negative bar color", "#D96C6C")
+axis_color  = st.sidebar.color_picker("Axis/text color", "#333333")
 font_size   = st.sidebar.slider("Base font size", 8, 20, 11)
 show_values = st.sidebar.checkbox("Show values on bars", True)
 
 st.sidebar.header("🧾 Text")
 title_template = st.sidebar.text_input("Chart title template", value="{entity} – {period} Cash Waterfall")
-y_label        = st.sidebar.text_input("Y-axis label", value="Cash £'000")
 currency_prefix = st.sidebar.text_input("Value prefix (e.g., £, $, €)", value="£")
+value_decimals = st.sidebar.slider("Value decimals", 0, 3, 0)
 
-st.sidebar.header("📐 Scale & Filters")
-scale_label = st.sidebar.selectbox("Display units", ["1 (raw)", "Thousands (×1,000)", "Millions (×1,000,000)"], index=1)
-scale_map = {"1 (raw)": 1.0, "Thousands (×1,000)": 1_000.0, "Millions (×1,000,000)": 1_000_000.0}
-display_scale = scale_map[scale_label]
+st.sidebar.header("📐 Units & Filters")
+# Unit maps
+unit_scale = {
+    "Pounds (£)": 1.0,
+    "Thousands (£'000)": 1_000.0,
+    "Millions (£m)": 1_000_000.0,
+}
+unit_suffix = {
+    "Pounds (£)": "£",
+    "Thousands (£'000)": "£'000",
+    "Millions (£m)": "£m",
+}
 
-min_label_threshold = st.sidebar.number_input("Hide labels below this absolute value (after scaling)", min_value=0.0, value=0.0, step=1.0)
+csv_unit = st.sidebar.selectbox("My CSV numbers are in", list(unit_scale.keys()), index=1)  # default to thousands
+display_unit = st.sidebar.selectbox("Display units", list(unit_scale.keys()), index=1)
+conversion_factor = unit_scale[csv_unit] / unit_scale[display_unit]  # multiply raw by this to display
+
+# Y label (auto from display unit) but allow user to override
+default_ylabel = f"Cash {unit_suffix[display_unit]}"
+y_label = st.sidebar.text_input("Y-axis label", value=default_ylabel)
+
+min_label_threshold = st.sidebar.number_input(
+    "Hide labels below this absolute value (after conversion)",
+    min_value=0.0, value=0.0, step=1.0
+)
 
 st.sidebar.header("✏️ Data editing")
 enable_editor = st.sidebar.checkbox("Enable table editor before plotting", False)
@@ -111,19 +122,13 @@ enable_editor = st.sidebar.checkbox("Enable table editor before plotting", False
 # Sample CSV download
 # =========================
 sample_csv = """entity,period,start,label,amount
-DevCo,2025-07,2296,Intercompany,1151
-DevCo,2025-07,2296,Overheads,-27
-DevCo,2025-07,2296,Project Costs,-562
-OpCo,2025-07,1386,Financing,15737
-OpCo,2025-07,1386,Project Costs,-14380
-TopCo,2025-07,2344,Intercompany,-1151
-TopCo,2025-07,2344,Financing,-15737
-TopCo,2025-07,2344,Overheads,-27
-TopCo,2025-07,2344,Equity Injection,21000
-Group,2025-07,6026,Project Costs,-16847
-Group,2025-07,6026,Overheads,-54
-Group,2025-07,6026,Financing,15737
-Group,2025-07,6026,Equity Injection,21000
+DevCo,2025-08,2242,Financing,2472
+DevCo,2025-08,2242,Intercompany,-2473
+DevCo,2025-08,2242,Overheads,-95
+DevCo,2025-08,2242,Payroll,-25
+DevCo,2025-08,2242,Project Costs,-638
+DevCo,2025-08,2242,Corp Tax,136
+DevCo,2025-08,2242,FX/Other,10
 """
 
 st.title("Cash Waterfall Generator")
@@ -138,19 +143,22 @@ st.download_button(
 with st.expander("CSV format help"):
     st.code(textwrap.dedent("""
 entity,period,start,label,amount
-DevCo,2025-07,2296,Intercompany,1151
-DevCo,2025-07,2296,Overheads,-27
-OpCo,2025-07,1386,Financing,15737
-Group,2025-07,6026,Project Costs,-16847
+DevCo,2025-08,2242,Financing,2472
+DevCo,2025-08,2242,Intercompany,-2473
+DevCo,2025-08,2242,Overheads,-95
 """))
 
 # =========================
 # Waterfall plotting
 # =========================
-def format_value(v: float, prefix: str = "") -> str:
-    """Format numbers with commas and optional currency prefix (already scaled)."""
+def format_value(v: float, prefix: str = "", decimals: int = 0) -> str:
+    """Format numbers with commas, decimals, and optional currency prefix. Avoid '-0'."""
     try:
-        return f"{prefix}{v:,.0f}"
+        rounded = round(float(v), decimals)
+        # Avoid "-0" and "-0.0"
+        if abs(rounded) < (0.5 * (10 ** -decimals)):
+            rounded = 0.0
+        return f"{prefix}{rounded:,.{decimals}f}"
     except Exception:
         return str(v)
 
@@ -158,10 +166,8 @@ def plot_waterfall(start, moves, labels, title):
     # Apply global font size
     rcParams['font.size'] = font_size
 
-    # Filter tiny movements for labeling (but still plot bars)
-    filtered_for_plot = list(zip(labels, moves))
-    labels2 = ["Start"] + [lab for lab, _ in filtered_for_plot] + ["End"]
-    values = [val for _, val in filtered_for_plot]
+    labels2 = ["Start"] + list(labels) + ["End"]
+    values = list(moves)
 
     cum = [start]
     for v in values:
@@ -169,31 +175,31 @@ def plot_waterfall(start, moves, labels, title):
     end_val = cum[-1]
 
     x = list(range(len(labels2)))
-    fig, ax = plt.subplots(figsize=(9, 5))
+    fig, ax = plt.subplots(figsize=(10, 5))
 
     # start bar
     ax.bar([0], [start], width=0.6, color=color_start)
     if show_values and abs(start) >= min_label_threshold:
-        ax.text(0, start/2 if start != 0 else 0.1, format_value(start, currency_prefix),
+        ax.text(0, start/2 if start != 0 else 0.1, format_value(start, currency_prefix, value_decimals),
                 ha="center", va="center", color=axis_color, fontsize=font_size, weight="bold")
 
     level = start
-    for i, (lab, v) in enumerate(filtered_for_plot, start=1):
+    for i, (lab, v) in enumerate(zip(labels, values), start=1):
         color = color_pos if v > 0 else color_neg
         ax.bar([i], [v], bottom=[level], width=0.6, color=color)
         if show_values and abs(v) >= min_label_threshold:
-            ax.text(i, level + v/2, format_value(v, currency_prefix),
+            ax.text(i, level + v/2, format_value(v, currency_prefix, value_decimals),
                     ha="center", va="center", color=axis_color, fontsize=font_size, weight="bold")
         level += v
 
     ax.bar([len(labels2)-1], [end_val], width=0.6, color=color_start)
     if show_values and abs(end_val) >= min_label_threshold:
-        ax.text(len(labels2)-1, end_val/2 if end_val != 0 else 0.1, format_value(end_val, currency_prefix),
+        ax.text(len(labels2)-1, end_val/2 if end_val != 0 else 0.1, format_value(end_val, currency_prefix, value_decimals),
                 ha="center", va="center", color=axis_color, fontsize=font_size, weight="bold")
 
     ax.set_xticks(x)
     ax.set_xticklabels(labels2, rotation=45, ha="right", color=axis_color)
-    ax.set_title(title, color=axis_color, fontsize=font_size+2, weight="bold")
+    ax.set_title(title, color=axis_color, fontsize=font_size+3, weight="bold")
     ax.axhline(0, linewidth=1, color="lightgrey")
     ax.set_ylabel(y_label, color=axis_color)
     for s in ["top", "right"]:
@@ -239,7 +245,7 @@ def validate_df(df: pd.DataFrame):
 # File upload & filters
 # =========================
 file = st.file_uploader("Upload CSV", type=["csv"])
-period_filter = st.text_input("Optional: filter by period (e.g., 2025-07)")
+period_filter = st.text_input("Optional: filter by period (e.g., 2025-08)")
 entity_filter = st.text_input("Optional: filter by entity (comma-separated)")
 
 if file:
@@ -279,10 +285,10 @@ if file:
 
             # Build charts per (entity, period)
             for (entity_name, period), g in df.groupby(["entity","period"], sort=True):
-                # Scale for display
-                start_val = float(g["start"].iloc[0]) / display_scale
+                # Convert from CSV units to display units
+                start_val = float(g["start"].iloc[0]) * conversion_factor
                 labels = g["label"].astype(str).tolist()
-                moves  = (g["amount"].astype(float) / display_scale).tolist()
+                moves  = (g["amount"].astype(float) * conversion_factor).tolist()
 
                 title  = title_template.format(entity=entity_name, period=period)
                 fig = plot_waterfall(start_val, moves, labels, title)
