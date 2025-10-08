@@ -6,6 +6,20 @@ import matplotlib.pyplot as plt
 from matplotlib import rcParams
 import streamlit as st
 
+def normalize_headers(df):
+    # Remove BOM, strip spaces, force lowercase
+    cleaned = []
+    for c in df.columns:
+        s = str(c)
+        try:
+            s = s.encode("utf-8").decode("utf-8-sig")  # drop BOM if present
+        except Exception:
+            pass
+        cleaned.append(s.strip().lower())
+    df.columns = cleaned
+    return df
+
+
 # ---- Styles & fonts ----
 try:
     rcParams['font.family'] = 'Century Gothic'
