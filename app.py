@@ -85,6 +85,30 @@ def validate_df(df: pd.DataFrame) -> tuple[pd.DataFrame, list[str]]:
 st.set_page_config(page_title="Cash Waterfall", layout="wide")
 st.title("Cash Waterfall Generator")
 
+sample_csv = """entity,period,start,label,amount
+DevCo,2025-07,2296,Intercompany,1151
+DevCo,2025-07,2296,Overheads,-27
+DevCo,2025-07,2296,Project Costs,-562
+OpCo,2025-07,1386,Financing,15737
+OpCo,2025-07,1386,Project Costs,-14380
+TopCo,2025-07,2344,Intercompany,-1151
+TopCo,2025-07,2344,Financing,-15737
+TopCo,2025-07,2344,Overheads,-27
+TopCo,2025-07,2344,Equity Injection,21000
+Group,2025-07,6026,Project Costs,-16847
+Group,2025-07,6026,Overheads,-54
+Group,2025-07,6026,Financing,15737
+Group,2025-07,6026,Equity Injection,21000
+"""
+
+st.download_button(
+    label="⬇️ Download sample CSV",
+    data=sample_csv,
+    file_name="sample_waterfall.csv",
+    mime="text/csv",
+    help="Click to download a sample CSV you can upload below."
+)
+
 with st.expander("CSV format help"):
     st.code(textwrap.dedent("""
 entity,period,start,label,amount
