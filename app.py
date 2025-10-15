@@ -124,6 +124,10 @@ min_label_threshold = st.sidebar.number_input(
 st.sidebar.header("✏️ Data editing")
 enable_editor = st.sidebar.checkbox("Enable table editor before plotting", False)
 
+# Hide zero movement rows (new)
+ignore_zero = st.sidebar.checkbox("Hide zero-value movements", True)
+zero_tol = st.sidebar.number_input("Zero threshold (<= hides)", min_value=0.0, value=0.0, step=0.01)
+
 show_debug = st.sidebar.checkbox("Show totals debug", False)
 
 # =========================
@@ -299,6 +303,16 @@ if file:
                 start_val = start_raw * conversion_factor
                 moves = [m * conversion_factor for m in moves_raw]
 
+                # Optionally drop zero or near-zero movements based on threshold
+                labels = g["label"].astype(str).tolist()
+                if ignore_zero:
+                    pairs = [(lab, mv) for lab, mv in zip(labels, moves) if abs(mv) > zero_tol]
+                    if pairs:
+                        labels, moves = zip(*pairs)
+                        labels, moves = list(labels), list(moves)
+                    else:
+                        labels, moves = [], []
+
                 # Debug totals in both raw and display units
                 if show_debug:
                     sum_moves_raw = float(g["amount"].astype(float).sum())
@@ -311,7 +325,6 @@ if file:
                         f"= End: {format_value(end_disp, currency_prefix, value_decimals)}"
                     )
 
-                labels = g["label"].astype(str).tolist()
                 title  = title_template.format(entity=entity_name, period=period)
                 fig = plot_waterfall(start_val, moves, labels, title)
                 st.pyplot(fig, clear_figure=True)
